@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<!--
+    results.html — Results dashboard for the AI Labour Impact Calculator.
+
+    Renders the three-scenario comparison table and interactive Chart.js
+    bar/line visualisations. Provides download links for CSV and PDF exports.
+
+    Context variables provided by the Flask route:
+        report          : FullReport instance
+        currency_symbol : e.g. "$"
+        currency_code   : e.g. "USD"
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Results &mdash; {{ report.organisation_name }} &mdash; AI Labour Impact Calculator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body class="results-page">
+
+<header class="site-header">
+    <div class="container">
+        <div class="header-inner">
+            <div class="logo-block">
+                <a href="{{ url_for('index') }}" class="logo-link" aria-label="Back to calculator home">
+                    <span class="logo-icon" aria-hidden="true">&#9881;</span>
+                    <span class="logo-text">AI Labour Impact Calculator</span>
+                </a>
+            </div>
+            <nav class="header-nav" aria-label="Page actions">
+                <a href="{{ url_for('index') }}" class="btn btn--ghost btn--sm">&#8592; New Analysis</a>
+            </nav>
+        </div>
+    </div>
+</header>
+
+<main class="main-content">
+    <div class="container">
+
+        <!-- Page heading -->
+        <section class="results-hero" aria-labelledby="results-heading">
+            <div class="results-hero__text">
+                <h1 class="page-title" id="results-heading">Workforce Automation Impact Report</h1>
+                <p class="page-subtitle">
+                    <strong>{{ report.organisation_name }}</strong>
+                    &nbsp;&middot;&nbsp;
+                    {{ report.total_headcount | int | format_int }} workers across
+                    {{ report.roles | length }} role categor{{ 'y' if report.roles | length == 1 else 'ies' }}
+                    &nbsp;&middot;&nbsp;
+                    Avg. salary: {{ currency_symbol }}{{ "{:,.0f}".format(report.average_annual_salary) }}
+                </p>
+            </div>
+            <div class="results-hero__actions">
+                <a
+                    href="{{ url_for('download_csv') }}"
+                    class="btn btn--secondary btn--sm"
+                    aria-label="Download scenario data as CSV"
+                >
+                    <span aria-hidden="true">&#8595;</span> Download CSV
+                </a>
+                <a
+                    href="{{ url_for('download_pdf') }}"
+                    class="btn btn--primary btn--sm"
+                    aria-label="Download full report as PDF"
+                >
+                    <span aria-hidden="true">&#8595;</span> Download PDF
+                </a>
+            </div>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- EXECUTIVE SUMMARY CARDS                                          -->
+        <!-- ================================================================ -->
+        <section class="summary-cards-section" aria-labelledby="summary-heading">
+            <h2 class="section-heading" id="summary-heading">Scenario Overview</h2>
+            <div class="summary-cards">
+                {% for scenario in report.all_scenarios %}
+                <div class="summary-card summary-card--{{ scenario.scenario_name | lower }}"
+                     role="region"
+                     aria-label="{{ scenario.scenario_name }} scenario summary">
+                    <div class="summary-card__header">
+                        <span class="summary-card__badge">{{ scenario.scenario_name }}</span>
+                        <span class="summary-card__horizon">{{ scenario.timeline_years }}-yr &nbsp;&middot;&nbsp; {{ scenario.timeline_multiplier }}x</span>
+                    </div>
+                    <div class="summary-card__displaced">
+                        {{ "{:,}".format(scenario.total_displaced) }}
+                    </div>
+                    <div class="summary-card__sub">
+                        workers displaced
+                        <span class="summary-card__pct">
+                            ({{ "{:.1f}".format(scenario.displacement_percentage) }}%)
+                        </span>
+                    </div>
+                    <div class="summary-card__divider" aria-hidden="true"></div>
+                    <dl class="summary-card__metrics">
+                        <dt>Robot Tax</dt>
+                        <dd>{{ currency_symbol }}{{ "{:,.0f}".format(scenario.robot_tax_liability) }}</dd>
+                        <dt>Safety-Net Exposure</dt>
+                        <dd>{{ currency_symbol }}{{ "{:,.0f}".format(scenario.total_safety_net_exposure) }}</dd>
+                        <dt class="summary-card__total-label">Total Exposure</dt>
+                        <dd class="summary-card__total-value">{{ currency_symbol }}{{ "{:,.0f}".format(scenario.total_financial_exposure) }}</dd>
+                    </dl>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- INTERACTIVE CHARTS                                               -->
+        <!-- ================================================================ -->
+        <section class="charts-section" aria-labelledby="charts-heading">
+            <h2 class="section-heading" id="charts-heading">Interactive Visualisations</h2>
+
+            <div class="charts-grid">
+                <!-- Displaced workers bar chart -->
+                <div class="chart-card">
+                    <h3 class="chart-card__title">Displaced Workers by Scenario</h3>
+                    <p class="chart-card__desc">Total workers projected to be displaced per automation timeline</p>
+                    <div class="chart-wrap">
+                        <canvas
+                            id="displacementBarChart"
+                            role="img"
+                            aria-label="Bar chart showing displaced workers across three scenarios"
+                        ></canvas>
+                    </div>
+                </div>
+
+                <!-- Financial exposure bar chart -->
+                <div class="chart-card">
+                    <h3 class="chart-card__title">Total Financial Exposure by Scenario</h3>
+                    <p class="chart-card__desc">Combined robot tax liability plus social safety-net costs</p>
+                    <div class="chart-wrap">
+                        <canvas
+                            id="exposureBarChart"
+                            role="img"
+                            aria-label="Bar chart showing total financial exposure across three scenarios"
+                        ></canvas>
+                    </div>
+                </div>
+
+                <!-- Safety-net breakdown stacked bar -->
+                <div class="chart-card">
+                    <h3 class="chart-card__title">Safety-Net Cost Breakdown</h3>
+                    <p class="chart-card__desc">Retraining, UBI transfers, and unemployment insurance by scenario</p>
+                    <div class="chart-wrap">
+                        <canvas
+                            id="safetyNetChart"
+                            role="img"
+                            aria-label="Stacked bar chart showing safety-net cost components by scenario"
+                        ></canvas>
+                    </div>
+                </div>
+
+                <!-- Displacement % line chart -->
+                <div class="chart-card">
+                    <h3 class="chart-card__title">Displacement Rate Comparison</h3>
+                    <p class="chart-card__desc">Percentage of total workforce displaced per scenario</p>
+                    <div class="chart-wrap">
+                        <canvas
+                            id="displacementPctChart"
+                            role="img"
+                            aria-label="Line chart showing displacement percentage across three scenarios"
+                        ></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- SCENARIO COMPARISON TABLE                                        -->
+        <!-- ================================================================ -->
+        <section class="table-section" aria-labelledby="comparison-heading">
+            <h2 class="section-heading" id="comparison-heading">Scenario Comparison</h2>
+
+            <div class="table-wrap">
+                <table class="data-table comparison-table" aria-label="Three-scenario comparison">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="col-metric">Metric</th>
+                            {% for scenario in report.all_scenarios %}
+                            <th scope="col" class="col-scenario col-scenario--{{ scenario.scenario_name | lower }}">{{ scenario.scenario_name }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="row-group-header">
+                            <td colspan="4"><strong>Timeline</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Planning horizon</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ s.timeline_years }} years</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>Automation multiplier</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ s.timeline_multiplier }}&times;</td>
+                            {% endfor %}
+                        </tr>
+                        <tr class="row-group-header">
+                            <td colspan="4"><strong>Workforce Impact</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Total headcount</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ "{:,}".format(s.total_headcount) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>Displaced workers</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num accent--{{ s.scenario_name | lower }}"><strong>{{ "{:,}".format(s.total_displaced) }}</strong></td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>Remaining workers</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ "{:,}".format(s.total_remaining) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>Displacement rate</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ "{:.1f}".format(s.displacement_percentage) }}%</td>
+                            {% endfor %}
+                        </tr>
+                        <tr class="row-group-header">
+                            <td colspan="4"><strong>Robot Tax Liability</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Estimated annual robot tax</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ currency_symbol }}{{ "{:,.2f}".format(s.robot_tax_liability) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr class="row-group-header">
+                            <td colspan="4"><strong>Social Safety-Net Exposure</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Retraining cost (one-time)</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ currency_symbol }}{{ "{:,.2f}".format(s.retraining_cost) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>UBI annual transfer</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ currency_symbol }}{{ "{:,.2f}".format(s.ubi_transfer_annual) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td>Unemployment insurance</td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num">{{ currency_symbol }}{{ "{:,.2f}".format(s.unemployment_insurance_cost) }}</td>
+                            {% endfor %}
+                        </tr>
+                        <tr>
+                            <td><strong>Total safety-net exposure</strong></td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num"><strong>{{ currency_symbol }}{{ "{:,.2f}".format(s.total_safety_net_exposure) }}</strong></td>
+                            {% endfor %}
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                        <tr class="total-row">
+                            <td><strong>Total Financial Exposure</strong></td>
+                            {% for s in report.all_scenarios %}
+                            <td class="num"><strong>{{ currency_symbol }}{{ "{:,.2f}".format(s.total_financial_exposure) }}</strong></td>
+                            {% endfor %}
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- ROLE-LEVEL BREAKDOWN                                             -->
+        <!-- ================================================================ -->
+        <section class="table-section" aria-labelledby="role-breakdown-heading">
+            <h2 class="section-heading" id="role-breakdown-heading">Role-Level Displacement Breakdown</h2>
+
+            <!-- Tab navigation for selecting scenario -->
+            <div class="tab-bar" role="tablist" aria-label="Select scenario for role breakdown">
+                {% for scenario in report.all_scenarios %}
+                <button
+                    role="tab"
+                    class="tab-btn {% if loop.first %}tab-btn--active{% endif %}"
+                    aria-selected="{{ 'true' if loop.first else 'false' }}"
+                    aria-controls="role-panel-{{ scenario.scenario_name | lower }}"
+                    id="role-tab-{{ scenario.scenario_name | lower }}"
+                    data-tab="{{ scenario.scenario_name | lower }}"
+                >{{ scenario.scenario_name }}</button>
+                {% endfor %}
+            </div>
+
+            {% for scenario in report.all_scenarios %}
+            <div
+                id="role-panel-{{ scenario.scenario_name | lower }}"
+                class="tab-panel {% if not loop.first %}tab-panel--hidden{% endif %}"
+                role="tabpanel"
+                aria-labelledby="role-tab-{{ scenario.scenario_name | lower }}"
+            >
+                <div class="table-wrap">
+                    <table class="data-table role-table" aria-label="Role breakdown for {{ scenario.scenario_name }} scenario">
+                        <thead>
+                            <tr>
+                                <th scope="col">Role</th>
+                                <th scope="col" class="num">Original Headcount</th>
+                                <th scope="col" class="num">Displaced</th>
+                                <th scope="col" class="num">Remaining</th>
+                                <th scope="col" class="num">Displacement Rate</th>
+                                <th scope="col">Impact Level</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rb in scenario.role_breakdowns %}
+                            {% set pct = rb.displacement_rate * 100 %}
+                            <tr>
+                                <td>{{ rb.role_name }}</td>
+                                <td class="num">{{ "{:,}".format(rb.original_headcount) }}</td>
+                                <td class="num"><strong>{{ "{:,}".format(rb.displaced_workers) }}</strong></td>
+                                <td class="num">{{ "{:,}".format(rb.remaining_workers) }}</td>
+                                <td class="num">{{ "{:.1f}".format(pct) }}%</td>
+                                <td>
+                                    <div class="impact-bar-wrap">
+                                        <div class="impact-bar"
+                                             style="width: {{ "{:.1f}".format(pct) }}%;"
+                                             aria-label="{{ "{:.1f}".format(pct) }}% displacement"
+                                        ></div>
+                                        <span class="impact-label
+                                            {% if pct < 20 %}impact-label--low
+                                            {% elif pct < 60 %}impact-label--medium
+                                            {% else %}impact-label--high{% endif %}"
+                                        >
+                                            {% if pct < 20 %}Low{% elif pct < 60 %}Medium{% else %}High{% endif %}
+                                        </span>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="empty-state">No role data available.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr class="total-row">
+                                <td><strong>Total</strong></td>
+                                <td class="num"><strong>{{ "{:,}".format(scenario.total_headcount) }}</strong></td>
+                                <td class="num"><strong>{{ "{:,}".format(scenario.total_displaced) }}</strong></td>
+                                <td class="num"><strong>{{ "{:,}".format(scenario.total_remaining) }}</strong></td>
+                                <td class="num"><strong>{{ "{:.1f}".format(scenario.displacement_percentage) }}%</strong></td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- INPUT ROLES SUMMARY                                              -->
+        <!-- ================================================================ -->
+        <section class="table-section" aria-labelledby="input-roles-heading">
+            <h2 class="section-heading" id="input-roles-heading">Input Role Categories</h2>
+            <div class="table-wrap">
+                <table class="data-table" aria-label="Input role categories">
+                    <thead>
+                        <tr>
+                            <th scope="col">Role Category</th>
+                            <th scope="col" class="num">Headcount</th>
+                            <th scope="col" class="num">Automation Potential</th>
+                            <th scope="col">Potential Level</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for role in report.roles %}
+                        <tr>
+                            <td>{{ role.role_name }}</td>
+                            <td class="num">{{ "{:,}".format(role.headcount) }}</td>
+                            <td class="num">{{ "{:.1f}".format(role.automation_potential) }}%</td>
+                            <td>
+                                <div class="impact-bar-wrap">
+                                    <div class="impact-bar"
+                                         style="width: {{ "{:.1f}".format(role.automation_potential) }}%;"
+                                         aria-label="{{ "{:.1f}".format(role.automation_potential) }}% automation potential"
+                                    ></div>
+                                    <span class="impact-label
+                                        {% if role.automation_potential < 20 %}impact-label--low
+                                        {% elif role.automation_potential < 60 %}impact-label--medium
+                                        {% else %}impact-label--high{% endif %}"
+                                    >
+                                        {% if role.automation_potential < 20 %}Low{% elif role.automation_potential < 60 %}Medium{% else %}High{% endif %}
+                                    </span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="empty-state">No roles defined.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot>
+                        <tr class="total-row">
+                            <td><strong>Total</strong></td>
+                            <td class="num"><strong>{{ "{:,}".format(report.total_headcount) }}</strong></td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- DOWNLOAD ACTIONS                                                 -->
+        <!-- ================================================================ -->
+        <section class="download-section" aria-labelledby="download-heading">
+            <h2 class="section-heading" id="download-heading">Download Report</h2>
+            <div class="download-cards">
+                <div class="download-card">
+                    <div class="download-card__icon" aria-hidden="true">&#128196;</div>
+                    <div class="download-card__body">
+                        <h3 class="download-card__title">CSV Export</h3>
+                        <p class="download-card__desc">
+                            Raw scenario data and role breakdowns in spreadsheet-ready format.
+                            Suitable for further analysis in Excel, Google Sheets, or Python.
+                        </p>
+                        <a href="{{ url_for('download_csv') }}" class="btn btn--secondary">
+                            <span aria-hidden="true">&#8595;</span> Download CSV
+                        </a>
+                    </div>
+                </div>
+                <div class="download-card">
+                    <div class="download-card__icon" aria-hidden="true">&#128209;</div>
+                    <div class="download-card__body">
+                        <h3 class="download-card__title">PDF Report</h3>
+                        <p class="download-card__desc">
+                            Styled, print-quality report with scenario comparison tables,
+                            CSS-based charts, and full policy assumptions documentation.
+                        </p>
+                        <a href="{{ url_for('download_pdf') }}" class="btn btn--primary">
+                            <span aria-hidden="true">&#8595;</span> Download PDF
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Back to form -->
+        <div class="back-link-row">
+            <a href="{{ url_for('index') }}" class="btn btn--ghost">
+                &#8592; Run a New Analysis
+            </a>
+        </div>
+
+    </div>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <p>
+            Grounded in the
+            <a href="https://openai.com/global-affairs/economic-blueprint" target="_blank" rel="noopener noreferrer">
+                OpenAI Industrial Policy Framework (2024)
+            </a>.
+            All figures are illustrative estimates for planning purposes only.
+        </p>
+    </div>
+</footer>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-3q3kgvuKPGPcLuT9Hq9RNSW9ry+Zin7szlbS1EM5PKkYFiV5ZW9KXPV+xGBzRdp" crossorigin="anonymous"></script>
+
+<script>
+(function () {
+    'use strict';
+
+    // ------------------------------------------------------------------ //
+    // Data injected from Jinja2 context                                   //
+    // ------------------------------------------------------------------ //
+    var SCENARIOS = [
+        {% for s in report.all_scenarios %}
+        {
+            name: {{ s.scenario_name | tojson }},
+            total_displaced: {{ s.total_displaced }},
+            total_headcount: {{ s.total_headcount }},
+            displacement_pct: {{ s.displacement_percentage | round(2) }},
+            robot_tax: {{ s.robot_tax_liability | round(2) }},
+            retraining: {{ s.retraining_cost | round(2) }},
+            ubi: {{ s.ubi_transfer_annual | round(2) }},
+            ui_cost: {{ s.unemployment_insurance_cost | round(2) }},
+            safety_net_total: {{ s.total_safety_net_exposure | round(2) }},
+            total_exposure: {{ s.total_financial_exposure | round(2) }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    var LABELS = SCENARIOS.map(function (s) { return s.name; });
+    var COLORS = {
+        optimistic:  { bg: 'rgba(39, 174, 96, 0.75)',  border: 'rgba(39, 174, 96, 1)' },
+        moderate:    { bg: 'rgba(41, 128, 185, 0.75)', border: 'rgba(41, 128, 185, 1)' },
+        aggressive:  { bg: 'rgba(192, 57, 43, 0.75)',  border: 'rgba(192, 57, 43, 1)' }
+    };
+
+    var COLOR_LIST = LABELS.map(function (l) { return COLORS[l.toLowerCase()]; });
+    var BG_COLORS   = COLOR_LIST.map(function (c) { return c.bg; });
+    var BDR_COLORS  = COLOR_LIST.map(function (c) { return c.border; });
+
+    // Currency symbol for axis / tooltip formatting
+    var CURRENCY = {{ currency_symbol | tojson }};
+
+    // ------------------------------------------------------------------ //
+    // Shared Chart.js defaults                                            //
+    // ------------------------------------------------------------------ //
+    Chart.defaults.font.family = "'Segoe UI', system-ui, -apple-system, sans-serif";
+    Chart.defaults.font.size = 13;
+    Chart.defaults.color = '#4a5568';
+
+    function moneyFormatter(val) {
+        if (val >= 1e9)  return CURRENCY + (val / 1e9).toFixed(1) + 'B';
+        if (val >= 1e6)  return CURRENCY + (val / 1e6).toFixed(1) + 'M';
+        if (val >= 1e3)  return CURRENCY + (val / 1e3).toFixed(0) + 'K';
+        return CURRENCY + val.toFixed(0);
+    }
+
+    function numberFormatter(val) {
+        if (val >= 1e6)  return (val / 1e6).toFixed(1) + 'M';
+        if (val >= 1e3)  return (val / 1e3).toFixed(0) + 'K';
+        return String(val);
+    }
+
+    var baseBarOptions = {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+            legend: { display: false }
+        },
+        scales: {
+            x: {
+                grid: { display: false },
+                ticks: { font: { size: 13, weight: '600' } }
+            },
+            y: {
+                grid: { color: 'rgba(0,0,0,0.06)' },
+                beginAtZero: true
+            }
+        }
+    };
+
+    // ------------------------------------------------------------------ //
+    // Chart 1 — Displaced Workers Bar Chart                               //
+    // ------------------------------------------------------------------ //
+    (function buildDisplacementBarChart() {
+        var ctx = document.getElementById('displacementBarChart').getContext('2d');
+        var data = SCENARIOS.map(function (s) { return s.total_displaced; });
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: LABELS,
+                datasets: [{
+                    label: 'Displaced Workers',
+                    data: data,
+                    backgroundColor: BG_COLORS,
+                    borderColor: BDR_COLORS,
+                    borderWidth: 2,
+                    borderRadius: 6,
+                    borderSkipped: false
+                }]
+            },
+            options: Object.assign({}, baseBarOptions, {
+                plugins: Object.assign({}, baseBarOptions.plugins, {
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ' ' + parseInt(ctx.parsed.y).toLocaleString() + ' workers';
+                            }
+                        }
+                    }
+                }),
+                scales: Object.assign({}, baseBarOptions.scales, {
+                    y: Object.assign({}, baseBarOptions.scales.y, {
+                        ticks: {
+                            callback: function (val) { return numberFormatter(val); }
+                        }
+                    })
+                })
+            })
+        });
+    })();
+
+    // ------------------------------------------------------------------ //
+    // Chart 2 — Total Financial Exposure Bar Chart                        //
+    // ------------------------------------------------------------------ //
+    (function buildExposureBarChart() {
+        var ctx = document.getElementById('exposureBarChart').getContext('2d');
+        var data = SCENARIOS.map(function (s) { return s.total_exposure; });
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: LABELS,
+                datasets: [{
+                    label: 'Total Financial Exposure',
+                    data: data,
+                    backgroundColor: BG_COLORS,
+                    borderColor: BDR_COLORS,
+                    borderWidth: 2,
+                    borderRadius: 6,
+                    borderSkipped: false
+                }]
+            },
+            options: Object.assign({}, baseBarOptions, {
+                plugins: Object.assign({}, baseBarOptions.plugins, {
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ' ' + CURRENCY + ctx.parsed.y.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            }
+                        }
+                    }
+                }),
+                scales: Object.assign({}, baseBarOptions.scales, {
+                    y: Object.assign({}, baseBarOptions.scales.y, {
+                        ticks: {
+                            callback: function (val) { return moneyFormatter(val); }
+                        }
+                    })
+                })
+            })
+        });
+    })();
+
+    // ------------------------------------------------------------------ //
+    // Chart 3 — Safety-Net Cost Stacked Bar                               //
+    // ------------------------------------------------------------------ //
+    (function buildSafetyNetChart() {
+        var ctx = document.getElementById('safetyNetChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: LABELS,
+                datasets: [
+                    {
+                        label: 'Retraining',
+                        data: SCENARIOS.map(function (s) { return s.retraining; }),
+                        backgroundColor: 'rgba(142, 68, 173, 0.75)',
+                        borderColor: 'rgba(142, 68, 173, 1)',
+                        borderWidth: 1,
+                        borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 6, bottomRight: 6 }
+                    },
+                    {
+                        label: 'UBI Transfer',
+                        data: SCENARIOS.map(function (s) { return s.ubi; }),
+                        backgroundColor: 'rgba(230, 126, 34, 0.75)',
+                        borderColor: 'rgba(230, 126, 34, 1)',
+                        borderWidth: 1,
+                        borderRadius: 0
+                    },
+                    {
+                        label: 'Unemployment Insurance',
+                        data: SCENARIOS.map(function (s) { return s.ui_cost; }),
+                        backgroundColor: 'rgba(41, 128, 185, 0.75)',
+                        borderColor: 'rgba(41, 128, 185, 1)',
+                        borderWidth: 1,
+                        borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'bottom',
+                        labels: { boxWidth: 14, padding: 14 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ' ' + ctx.dataset.label + ': ' + CURRENCY + ctx.parsed.y.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { stacked: true, grid: { display: false }, ticks: { font: { size: 13, weight: '600' } } },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: {
+                            callback: function (val) { return moneyFormatter(val); }
+                        }
+                    }
+                }
+            }
+        });
+    })();
+
+    // ------------------------------------------------------------------ //
+    // Chart 4 — Displacement % Line Chart                                 //
+    // ------------------------------------------------------------------ //
+    (function buildDisplacementPctChart() {
+        var ctx = document.getElementById('displacementPctChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: LABELS,
+                datasets: [{
+                    label: 'Displacement Rate (%)',
+                    data: SCENARIOS.map(function (s) { return parseFloat(s.displacement_pct.toFixed(2)); }),
+                    backgroundColor: 'rgba(41, 128, 185, 0.12)',
+                    borderColor: 'rgba(41, 128, 185, 1)',
+                    borderWidth: 3,
+                    pointBackgroundColor: BDR_COLORS,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    fill: true,
+                    tension: 0.35
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ' ' + ctx.parsed.y.toFixed(1) + '% displaced';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { font: { size: 13, weight: '600' } } },
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: {
+                            callback: function (val) { return val + '%'; }
+                        }
+                    }
+                }
+            }
+        });
+    })();
+
+    // ------------------------------------------------------------------ //
+    // Tab panel logic for role breakdown                                  //
+    // ------------------------------------------------------------------ //
+    (function initTabs() {
+        var tabBtns = document.querySelectorAll('.tab-btn');
+        var tabPanels = document.querySelectorAll('.tab-panel');
+
+        tabBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var targetTab = btn.dataset.tab;
+
+                tabBtns.forEach(function (b) {
+                    b.classList.remove('tab-btn--active');
+                    b.setAttribute('aria-selected', 'false');
+                });
+                tabPanels.forEach(function (p) {
+                    p.classList.add('tab-panel--hidden');
+                });
+
+                btn.classList.add('tab-btn--active');
+                btn.setAttribute('aria-selected', 'true');
+                var panel = document.getElementById('role-panel-' + targetTab);
+                if (panel) panel.classList.remove('tab-panel--hidden');
+            });
+        });
+    })();
+
+})();
+</script>
+
+</body>
+</html>

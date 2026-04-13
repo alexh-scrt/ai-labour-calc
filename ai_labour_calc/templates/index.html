@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<!--
+    index.html — Single-page input form for the AI Labour Impact Calculator.
+
+    Accepts organisation details, average annual salary, and one or more
+    role categories (role name, headcount, automation potential %).
+    Submits as a standard HTML POST form to /calculate.
+
+    Dynamic role rows are managed with vanilla JavaScript.
+    Styling is provided by static/style.css.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Labour Impact Calculator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container">
+        <div class="header-inner">
+            <div class="logo-block">
+                <span class="logo-icon" aria-hidden="true">&#9881;</span>
+                <span class="logo-text">AI Labour Impact Calculator</span>
+            </div>
+            <p class="header-tagline">Model AI-driven workforce changes across three automation timelines</p>
+        </div>
+    </div>
+</header>
+
+<main class="main-content">
+    <div class="container">
+
+        <!-- Flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-messages">
+            {% for category, message in messages %}
+            <div class="flash flash--{{ category }}" role="alert">
+                <span class="flash-icon">{% if category == 'error' %}&#9888;{% else %}&#10003;{% endif %}</span>
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <!-- Page intro -->
+        <section class="intro-section">
+            <h1 class="page-title">Workforce Automation Impact Analysis</h1>
+            <p class="page-subtitle">
+                Enter your organisation's headcount, role categories, and estimated automation
+                potential to receive a scenario comparison report covering projected job
+                displacement, robot tax liabilities, and social safety-net cost exposure
+                across <strong>optimistic</strong>, <strong>moderate</strong>, and
+                <strong>aggressive</strong> AI adoption timelines.
+            </p>
+        </section>
+
+        <!-- Timeline scenario info cards -->
+        <section class="scenario-info" aria-label="Scenario overview">
+            <div class="scenario-cards">
+                <div class="scenario-card scenario-card--optimistic">
+                    <div class="scenario-card__badge">Optimistic</div>
+                    <div class="scenario-card__stat">0.5&times; multiplier</div>
+                    <div class="scenario-card__detail">10-year horizon &mdash; gradual, human-centred AI adoption</div>
+                </div>
+                <div class="scenario-card scenario-card--moderate">
+                    <div class="scenario-card__badge">Moderate</div>
+                    <div class="scenario-card__stat">1.0&times; multiplier</div>
+                    <div class="scenario-card__detail">7-year horizon &mdash; mainstream market-pace automation</div>
+                </div>
+                <div class="scenario-card scenario-card--aggressive">
+                    <div class="scenario-card__badge">Aggressive</div>
+                    <div class="scenario-card__stat">1.5&times; multiplier</div>
+                    <div class="scenario-card__detail">4-year horizon &mdash; rapid, unconstrained automation</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main input form -->
+        <form id="calc-form" method="POST" action="{{ url_for('calculate') }}" novalidate>
+
+            <!-- Organisation details -->
+            <section class="form-section" aria-labelledby="org-section-heading">
+                <h2 class="form-section__title" id="org-section-heading">
+                    <span class="section-num">1</span>
+                    Organisation Details
+                </h2>
+
+                <div class="form-grid form-grid--2col">
+                    <div class="form-group">
+                        <label class="form-label" for="organisation_name">
+                            Organisation Name
+                            <span class="required" aria-label="required">*</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="organisation_name"
+                            name="organisation_name"
+                            class="form-input"
+                            placeholder="e.g. Acme Corporation"
+                            value="{{ form_data.organisation_name if form_data else '' }}"
+                            maxlength="200"
+                            required
+                            autocomplete="organization"
+                        />
+                        <span class="form-hint">Used in report headers and file names</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="average_annual_salary">
+                            Average Annual Salary (USD)
+                            <span class="required" aria-label="required">*</span>
+                        </label>
+                        <div class="input-prefix-wrap">
+                            <span class="input-prefix" aria-hidden="true">$</span>
+                            <input
+                                type="number"
+                                id="average_annual_salary"
+                                name="average_annual_salary"
+                                class="form-input form-input--prefixed"
+                                placeholder="55000"
+                                value="{{ form_data.average_annual_salary if form_data else '' }}"
+                                min="1000"
+                                max="10000000"
+                                step="1"
+                                required
+                            />
+                        </div>
+                        <span class="form-hint">Baseline salary used for robot tax and safety-net calculations</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Role categories -->
+            <section class="form-section" aria-labelledby="roles-section-heading">
+                <h2 class="form-section__title" id="roles-section-heading">
+                    <span class="section-num">2</span>
+                    Role Categories
+                </h2>
+                <p class="form-section__desc">
+                    Add each workforce segment with its headcount and estimated automation
+                    potential. You may add up to 50 role categories.
+                </p>
+
+                <div class="roles-table-wrap">
+                    <table class="roles-table" id="roles-table" aria-label="Role categories">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="col-role">Role Name <span class="required">*</span></th>
+                                <th scope="col" class="col-headcount">Headcount <span class="required">*</span></th>
+                                <th scope="col" class="col-automation">Automation Potential (%) <span class="required">*</span></th>
+                                <th scope="col" class="col-remove" aria-label="Remove"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="roles-tbody">
+                            <!-- Rows injected by JS; at least one row on load -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="roles-actions">
+                    <button
+                        type="button"
+                        id="add-role-btn"
+                        class="btn btn--secondary btn--sm"
+                        aria-label="Add another role category"
+                    >
+                        <span aria-hidden="true">&#43;</span> Add Role
+                    </button>
+                    <span class="roles-counter" id="roles-counter" aria-live="polite">1 role added</span>
+                </div>
+            </section>
+
+            <!-- Automation potential guide -->
+            <section class="form-section form-section--info" aria-labelledby="guide-heading">
+                <h3 class="form-section__subtitle" id="guide-heading">Automation Potential Guide</h3>
+                <div class="potential-guide">
+                    <div class="potential-range potential-range--low">
+                        <strong>0–20%</strong>
+                        <span>Complex judgment, creativity, interpersonal roles (surgeons, therapists, executives)</span>
+                    </div>
+                    <div class="potential-range potential-range--medium">
+                        <strong>20–60%</strong>
+                        <span>Mixed tasks with significant human oversight (analysts, project managers, sales)</span>
+                    </div>
+                    <div class="potential-range potential-range--high">
+                        <strong>60–100%</strong>
+                        <span>Routine, rule-based, or data-processing tasks (data entry, call centre, bookkeeping)</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Submit -->
+            <div class="form-submit-row">
+                <button type="submit" class="btn btn--primary btn--lg" id="submit-btn">
+                    <span class="btn-icon" aria-hidden="true">&#9654;</span>
+                    Generate Scenario Report
+                </button>
+                <p class="form-submit-hint">
+                    Results will include displacement projections, robot tax estimates,
+                    and downloadable CSV &amp; PDF reports.
+                </p>
+            </div>
+
+        </form>
+    </div>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <p>
+            Grounded in the
+            <a href="https://openai.com/global-affairs/economic-blueprint" target="_blank" rel="noopener noreferrer">
+                OpenAI Industrial Policy Framework (2024)
+            </a>.
+            All figures are illustrative estimates for planning purposes only.
+        </p>
+    </div>
+</footer>
+
+<script>
+(function () {
+    'use strict';
+
+    // ------------------------------------------------------------------ //
+    // Constants                                                            //
+    // ------------------------------------------------------------------ //
+    var MAX_ROLES = 50;
+    var MIN_ROLES = 1;
+
+    // Pre-populated roles from server (used when re-rendering after error).
+    // Injected via Jinja2; falls back to a single empty row.
+    var prefillRoles = [
+        {% if form_data and form_data.roles %}
+        {% for role in form_data.roles %}
+        {
+            name: {{ role.role_name | tojson }},
+            headcount: {{ role.headcount | tojson }},
+            automation: {{ role.automation_potential | tojson }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+        {% else %}
+        { name: '', headcount: '', automation: '' }
+        {% endif %}
+    ];
+
+    // ------------------------------------------------------------------ //
+    // State                                                                //
+    // ------------------------------------------------------------------ //
+    var rowCount = 0;
+    var tbody = document.getElementById('roles-tbody');
+    var addBtn = document.getElementById('add-role-btn');
+    var counter = document.getElementById('roles-counter');
+
+    // ------------------------------------------------------------------ //
+    // Row creation                                                         //
+    // ------------------------------------------------------------------ //
+    function createRow(data) {
+        data = data || { name: '', headcount: '', automation: '' };
+        rowCount++;
+        var idx = rowCount;  // 1-based index for aria labels
+
+        var tr = document.createElement('tr');
+        tr.className = 'role-row';
+        tr.dataset.rowIndex = idx;
+
+        tr.innerHTML = [
+            '<td class="col-role">',
+            '  <input',
+            '    type="text"',
+            '    name="role_name[]"',
+            '    class="form-input form-input--table"',
+            '    placeholder="e.g. Data Entry Clerks"',
+            '    value="' + escHtml(String(data.name)) + '"',
+            '    maxlength="120"',
+            '    required',
+            '    aria-label="Role name for row ' + idx + '"',
+            '  />',
+            '</td>',
+            '<td class="col-headcount">',
+            '  <input',
+            '    type="number"',
+            '    name="headcount[]"',
+            '    class="form-input form-input--table form-input--num"',
+            '    placeholder="e.g. 120"',
+            '    value="' + escHtml(String(data.headcount)) + '"',
+            '    min="0"',
+            '    max="1000000"',
+            '    step="1"',
+            '    required',
+            '    aria-label="Headcount for row ' + idx + '"',
+            '  />',
+            '</td>',
+            '<td class="col-automation">',
+            '  <div class="slider-cell">',
+            '    <input',
+            '      type="range"',
+            '      name="automation_potential_range[]"',
+            '      class="range-input"',
+            '      min="0"',
+            '      max="100"',
+            '      step="0.5"',
+            '      value="' + escHtml(String(data.automation !== '' ? data.automation : 50)) + '"',
+            '      aria-label="Automation potential slider for row ' + idx + '"',
+            '      tabindex="-1"',
+            '    />',
+            '    <input',
+            '      type="number"',
+            '      name="automation_potential[]"',
+            '      class="form-input form-input--table form-input--num form-input--pct"',
+            '      placeholder="0–100"',
+            '      value="' + escHtml(String(data.automation)) + '"',
+            '      min="0"',
+            '      max="100"',
+            '      step="0.5"',
+            '      required',
+            '      aria-label="Automation potential % for row ' + idx + '"',
+            '    />',
+            '    <span class="pct-symbol" aria-hidden="true">%</span>',
+            '  </div>',
+            '</td>',
+            '<td class="col-remove">',
+            '  <button type="button" class="remove-row-btn" aria-label="Remove row ' + idx + '">',
+            '    <span aria-hidden="true">&times;</span>',
+            '  </button>',
+            '</td>'
+        ].join('');
+
+        // Wire up slider ↔ number input sync
+        var rangeInput = tr.querySelector('input[type="range"]');
+        var numInput = tr.querySelector('.form-input--pct');
+        var removeBtn = tr.querySelector('.remove-row-btn');
+
+        rangeInput.addEventListener('input', function () {
+            numInput.value = rangeInput.value;
+        });
+
+        numInput.addEventListener('input', function () {
+            var v = parseFloat(numInput.value);
+            if (!isNaN(v) && v >= 0 && v <= 100) {
+                rangeInput.value = v;
+            }
+        });
+
+        removeBtn.addEventListener('click', function () {
+            removeRow(tr);
+        });
+
+        return tr;
+    }
+
+    function removeRow(tr) {
+        var currentRows = tbody.querySelectorAll('.role-row');
+        if (currentRows.length <= MIN_ROLES) {
+            // Visual shake to indicate can't remove last row
+            tr.classList.add('shake');
+            setTimeout(function () { tr.classList.remove('shake'); }, 500);
+            return;
+        }
+        tbody.removeChild(tr);
+        updateCounter();
+        updateAddButton();
+    }
+
+    function updateCounter() {
+        var n = tbody.querySelectorAll('.role-row').length;
+        counter.textContent = n === 1 ? '1 role added' : n + ' roles added';
+    }
+
+    function updateAddButton() {
+        var n = tbody.querySelectorAll('.role-row').length;
+        addBtn.disabled = n >= MAX_ROLES;
+        addBtn.title = n >= MAX_ROLES ? 'Maximum of ' + MAX_ROLES + ' roles reached' : '';
+    }
+
+    // ------------------------------------------------------------------ //
+    // Escape helpers                                                       //
+    // ------------------------------------------------------------------ //
+    function escHtml(str) {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    // ------------------------------------------------------------------ //
+    // Initialise rows from prefill data                                   //
+    // ------------------------------------------------------------------ //
+    prefillRoles.forEach(function (roleData) {
+        tbody.appendChild(createRow(roleData));
+    });
+    updateCounter();
+    updateAddButton();
+
+    // ------------------------------------------------------------------ //
+    // Add role button                                                      //
+    // ------------------------------------------------------------------ //
+    addBtn.addEventListener('click', function () {
+        var currentRows = tbody.querySelectorAll('.role-row').length;
+        if (currentRows >= MAX_ROLES) return;
+        var newRow = createRow(null);
+        tbody.appendChild(newRow);
+        newRow.querySelector('input[type="text"]').focus();
+        updateCounter();
+        updateAddButton();
+    });
+
+    // ------------------------------------------------------------------ //
+    // Client-side form validation feedback                                //
+    // ------------------------------------------------------------------ //
+    var form = document.getElementById('calc-form');
+    form.addEventListener('submit', function (e) {
+        var valid = true;
+        var rows = tbody.querySelectorAll('.role-row');
+
+        // Clear previous inline errors
+        form.querySelectorAll('.inline-error').forEach(function (el) {
+            el.remove();
+        });
+        form.querySelectorAll('.form-input--error').forEach(function (el) {
+            el.classList.remove('form-input--error');
+        });
+
+        // Validate org name
+        var orgInput = document.getElementById('organisation_name');
+        if (!orgInput.value.trim()) {
+            markError(orgInput, 'Please enter your organisation name.');
+            valid = false;
+        }
+
+        // Validate salary
+        var salaryInput = document.getElementById('average_annual_salary');
+        var salaryVal = parseFloat(salaryInput.value);
+        if (isNaN(salaryVal) || salaryVal < 1000 || salaryVal > 10000000) {
+            markError(salaryInput, 'Enter a salary between $1,000 and $10,000,000.');
+            valid = false;
+        }
+
+        // Validate role rows
+        rows.forEach(function (row, i) {
+            var nameInput = row.querySelector('input[name="role_name[]"]');
+            var hcInput = row.querySelector('input[name="headcount[]"]');
+            var autoInput = row.querySelector('input[name="automation_potential[]"]');
+
+            if (!nameInput.value.trim()) {
+                markError(nameInput, 'Role name is required.');
+                valid = false;
+            }
+            var hc = parseInt(hcInput.value, 10);
+            if (isNaN(hc) || hc < 0 || hc > 1000000) {
+                markError(hcInput, 'Enter headcount (0–1,000,000).');
+                valid = false;
+            }
+            var ap = parseFloat(autoInput.value);
+            if (isNaN(ap) || ap < 0 || ap > 100) {
+                markError(autoInput, 'Enter a value between 0 and 100.');
+                valid = false;
+            }
+        });
+
+        if (!valid) {
+            e.preventDefault();
+            var firstError = form.querySelector('.form-input--error');
+            if (firstError) {
+                firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                firstError.focus();
+            }
+        } else {
+            // Show loading state
+            var submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Calculating&hellip;';
+        }
+    });
+
+    function markError(input, message) {
+        input.classList.add('form-input--error');
+        var errorSpan = document.createElement('span');
+        errorSpan.className = 'inline-error';
+        errorSpan.setAttribute('role', 'alert');
+        errorSpan.textContent = message;
+        input.parentNode.insertBefore(errorSpan, input.nextSibling);
+    }
+
+})();
+</script>
+
+</body>
+</html>
