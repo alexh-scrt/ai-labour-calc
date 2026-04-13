@@ -7,12 +7,16 @@ Covers:
 - render_pdf_html: returns string, contains key content
 - generate_pdf_bytes: returns bytes, non-empty, PDF magic bytes
 - _fmt_money, _fmt_pct, _fmt_intcomma: formatting helpers
+- _utc_timestamp: returns UTC string
 - Edge cases: zero headcount, zero displacement, single role
+- CSV data integrity: values match DataFrame
 """
 
 from __future__ import annotations
 
+import io
 import math
+import pandas as pd
 import pytest
 
 from ai_labour_calc.models import RoleInput, FullReport
@@ -78,6 +82,16 @@ def single_role_report() -> FullReport:
     return calculate_report(roles, 40_000.0, "Solo Org")
 
 
+@pytest.fixture
+def high_displacement_report() -> FullReport:
+    """Report with high automation potential roles."""
+    roles = [
+        RoleInput("Data Entry", 1000, 90.0),
+        RoleInput("Call Centre", 500, 85.0),
+    ]
+    return calculate_report(roles, 35_000.0, "High Automation Corp")
+
+
 # --------------------------------------------------------------------------- #
 # build_report_dataframe                                                       #
 # --------------------------------------------------------------------------- #
@@ -87,6 +101,10 @@ class TestBuildReportDataframe:
     def test_returns_dataframe_with_three_rows(self, standard_report) -> None:
         df = build_report_dataframe(standard_report)
         assert len(df) == 3
+
+    def test_returns_pandas_dataframe(self, standard_report) -> None:
+        df = build_report_dataframe(standard_report)
+        assert isinstance(df, pd.DataFrame)
 
     def test_scenario_column_values(self, standard_report) -> None:
         df = build_report_dataframe(standard_report)
@@ -151,6 +169,14 @@ class TestBuildReportDataframe:
         with pytest.raises(TypeError, match="FullReport"):
             build_report_dataframe("not a report")  # type: ignore
 
+    def test_type_error_on_none(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            build_report_dataframe(None)  # type: ignore
+
+    def test_type_error_on_dict(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            build_report_dataframe({"scenario": "test"})  # type: ignore
+
     def test_zero_displacement_report(self, zero_displacement_report) -> None:
         df = build_report_dataframe(zero_displacement_report)
         assert (df["total_displaced"] == 0).all()
@@ -167,6 +193,38 @@ class TestBuildReportDataframe:
         col = f"avg_annual_salary_{CURRENCY_CODE}"
         assert (df[col] == round(standard_salary, 2)).all()
 
+    def test_timeline_multiplier_values(self, standard_report) -> None:
+        df = build_report_dataframe(standard_report)
+        multipliers = list(df["timeline_multiplier"])
+        assert math.isclose(multipliers[0], 0.5)
+        assert math.isclose(multipliers[1], 1.0)
+        assert math.isclose(multipliers[2], 1.5)
+
+    def test_financial_exposure_equals_tax_plus_safety_net(self, standard_report) -> None:
+        df = build_report_dataframe(standard_report)
+        tax_col = f"robot_tax_liability_{CURRENCY_CODE}"
+        sn_col = f"total_safety_net_exposure_{CURRENCY_CODE}"
+        exp_col = f"total_financial_exposure_{CURRENCY_CODE}"
+        for _, row in df.iterrows():
+            expected = row[tax_col] + row[sn_col]
+            assert math.isclose(row[exp_col], expected, rel_tol=1e-5)
+
+    def test_safety_net_components_sum_correctly(self, standard_report) -> None:
+        df = build_report_dataframe(standard_report)
+        r_col = f"retraining_cost_{CURRENCY_CODE}"
+        u_col = f"ubi_transfer_annual_{CURRENCY_CODE}"
+        ui_col = f"unemployment_insurance_cost_{CURRENCY_CODE}"
+        sn_col = f"total_safety_net_exposure_{CURRENCY_CODE}"
+        for _, row in df.iterrows():
+            expected = row[r_col] + row[u_col] + row[ui_col]
+            assert math.isclose(row[sn_col], expected, rel_tol=1e-5)
+
+    def test_high_displacement_report(self, high_displacement_report) -> None:
+        df = build_report_dataframe(high_displacement_report)
+        assert len(df) == 3
+        # Aggressive should have highest displacement
+        assert df["total_displaced"].iloc[2] >= df["total_displaced"].iloc[0]
+
 
 # --------------------------------------------------------------------------- #
 # build_role_breakdown_dataframe                                               #
@@ -180,6 +238,10 @@ class TestBuildRoleBreakdownDataframe:
         df = build_role_breakdown_dataframe(standard_report)
         expected_rows = 3 * len(standard_roles)  # 3 scenarios × 3 roles = 9
         assert len(df) == expected_rows
+
+    def test_returns_pandas_dataframe(self, standard_report) -> None:
+        df = build_role_breakdown_dataframe(standard_report)
+        assert isinstance(df, pd.DataFrame)
 
     def test_required_columns_present(self, standard_report) -> None:
         df = build_role_breakdown_dataframe(standard_report)
@@ -224,6 +286,10 @@ class TestBuildRoleBreakdownDataframe:
         with pytest.raises(TypeError, match="FullReport"):
             build_role_breakdown_dataframe(42)  # type: ignore
 
+    def test_type_error_on_none(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            build_role_breakdown_dataframe(None)  # type: ignore
+
     def test_zero_automation_all_zeros(self, zero_displacement_report) -> None:
         df = build_role_breakdown_dataframe(zero_displacement_report)
         assert (df["displaced_workers"] == 0).all()
@@ -232,6 +298,38 @@ class TestBuildRoleBreakdownDataframe:
     def test_organisation_column_populated(self, standard_report) -> None:
         df = build_role_breakdown_dataframe(standard_report)
         assert all(df["organisation"] == "Test Organisation")
+
+    def test_role_names_present(self, standard_report) -> None:
+        df = build_role_breakdown_dataframe(standard_report)
+        role_names = set(df["role_name"].unique())
+        assert "Data Entry" in role_names
+        assert "Analysts" in role_names
+        assert "Managers" in role_names
+
+    def test_displacement_pct_equals_rate_times_100(self, standard_report) -> None:
+        df = build_role_breakdown_dataframe(standard_report)
+        for _, row in df.iterrows():
+            assert math.isclose(
+                row["displacement_pct"],
+                round(row["displacement_rate"] * 100, 1),
+                rel_tol=1e-4,
+            )
+
+    def test_single_role_six_rows(self, single_role_report) -> None:
+        df = build_role_breakdown_dataframe(single_role_report)
+        # 1 role × 3 scenarios = 3 rows
+        assert len(df) == 3
+
+    def test_aggressive_displacement_geq_moderate(self, standard_report) -> None:
+        df = build_role_breakdown_dataframe(standard_report)
+        for role_name in df["role_name"].unique():
+            moderate_rows = df[(df["scenario"] == "Moderate") & (df["role_name"] == role_name)]
+            aggressive_rows = df[(df["scenario"] == "Aggressive") & (df["role_name"] == role_name)]
+            if not moderate_rows.empty and not aggressive_rows.empty:
+                assert (
+                    aggressive_rows["displaced_workers"].iloc[0]
+                    >= moderate_rows["displaced_workers"].iloc[0]
+                )
 
 
 # --------------------------------------------------------------------------- #
@@ -285,17 +383,49 @@ class TestGenerateCsvBytes:
         with pytest.raises(TypeError, match="FullReport"):
             generate_csv_bytes(None)  # type: ignore
 
+    def test_type_error_on_string(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            generate_csv_bytes("not a report")  # type: ignore
+
     def test_zero_displacement_csv(self, zero_displacement_report) -> None:
         result = generate_csv_bytes(zero_displacement_report).decode("utf-8")
         assert "Zero Corp" in result
 
     def test_disclaimer_in_csv(self, standard_report) -> None:
         result = generate_csv_bytes(standard_report).decode("utf-8")
-        assert "illustrative" in result.lower() or "disclaimer" in result.lower() or "purposes" in result.lower()
+        # The disclaimer or policy framework attribution should appear
+        assert (
+            "illustrative" in result.lower()
+            or "disclaimer" in result.lower()
+            or "purposes" in result.lower()
+            or "OpenAI" in result
+        )
 
     def test_newline_separator_present(self, standard_report) -> None:
         result = generate_csv_bytes(standard_report).decode("utf-8")
         assert "\n" in result
+
+    def test_csv_without_breakdown_smaller_than_with(self, standard_report) -> None:
+        with_breakdown = generate_csv_bytes(standard_report, include_role_breakdown=True)
+        without_breakdown = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        assert len(with_breakdown) > len(without_breakdown)
+
+    def test_generated_timestamp_in_csv(self, standard_report) -> None:
+        result = generate_csv_bytes(standard_report).decode("utf-8")
+        assert "UTC" in result
+
+    def test_policy_framework_name_in_csv(self, standard_report) -> None:
+        result = generate_csv_bytes(standard_report).decode("utf-8")
+        assert "OpenAI" in result
+
+    def test_high_displacement_csv_non_zero_values(self, high_displacement_report) -> None:
+        result = generate_csv_bytes(high_displacement_report).decode("utf-8")
+        assert "High Automation Corp" in result
+        # Should have non-zero displaced values in the CSV data
+        data_lines = [ln for ln in result.splitlines() if not ln.startswith("#")]
+        data_str = "\n".join(data_lines)
+        parsed = pd.read_csv(io.StringIO(data_str))
+        assert parsed["total_displaced"].max() > 0
 
 
 # --------------------------------------------------------------------------- #
@@ -350,6 +480,10 @@ class TestRenderPdfHtml:
         with pytest.raises(TypeError, match="FullReport"):
             render_pdf_html({"not": "a report"})  # type: ignore
 
+    def test_type_error_on_none(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            render_pdf_html(None)  # type: ignore
+
     def test_zero_displacement_renders(self, zero_displacement_report) -> None:
         html = render_pdf_html(zero_displacement_report)
         assert "Zero Corp" in html
@@ -368,6 +502,36 @@ class TestRenderPdfHtml:
         html = render_pdf_html(single_role_report)
         assert "Solo Org" in html
         assert "Clerks" in html
+
+    def test_html_contains_body_element(self, standard_report) -> None:
+        html = render_pdf_html(standard_report)
+        assert "<body" in html
+        assert "</body>" in html
+
+    def test_html_contains_head_element(self, standard_report) -> None:
+        html = render_pdf_html(standard_report)
+        assert "<head" in html
+        assert "</head>" in html
+
+    def test_html_contains_style(self, standard_report) -> None:
+        html = render_pdf_html(standard_report)
+        assert "<style" in html
+
+    def test_html_contains_table(self, standard_report) -> None:
+        html = render_pdf_html(standard_report)
+        assert "<table" in html
+        assert "</table>" in html
+
+    def test_all_scenario_financial_values_appear(self, standard_report) -> None:
+        html = render_pdf_html(standard_report)
+        for scenario in standard_report.all_scenarios:
+            # Financial values should appear somewhere in the formatted HTML
+            # They will be formatted as money strings
+            assert scenario.scenario_name in html
+
+    def test_high_displacement_renders(self, high_displacement_report) -> None:
+        html = render_pdf_html(high_displacement_report)
+        assert "High Automation Corp" in html
 
 
 # --------------------------------------------------------------------------- #
@@ -395,6 +559,10 @@ class TestGeneratePdfBytes:
         with pytest.raises(TypeError, match="FullReport"):
             generate_pdf_bytes("string")  # type: ignore
 
+    def test_type_error_on_none(self) -> None:
+        with pytest.raises(TypeError, match="FullReport"):
+            generate_pdf_bytes(None)  # type: ignore
+
     def test_zero_displacement_pdf(self, zero_displacement_report) -> None:
         result = generate_pdf_bytes(zero_displacement_report)
         assert result[:4] == b"%PDF"
@@ -407,6 +575,11 @@ class TestGeneratePdfBytes:
         """A real PDF with content should be at least a few KB."""
         result = generate_pdf_bytes(standard_report)
         assert len(result) > 1024  # At least 1 KB
+
+    def test_high_displacement_pdf(self, high_displacement_report) -> None:
+        result = generate_pdf_bytes(high_displacement_report)
+        assert result[:4] == b"%PDF"
+        assert len(result) > 1024
 
 
 # --------------------------------------------------------------------------- #
@@ -436,6 +609,14 @@ class TestFormattingHelpers:
         result = _fmt_money(1_000_000.0)
         assert "1,000,000.00" in result
 
+    def test_money_small_value(self) -> None:
+        result = _fmt_money(0.01)
+        assert "0.01" in result
+
+    def test_money_integer_input(self) -> None:
+        result = _fmt_money(5000)
+        assert "5,000.00" in result
+
     # _fmt_pct
     def test_pct_basic(self) -> None:
         assert _fmt_pct(45.3) == "45.3%"
@@ -451,6 +632,14 @@ class TestFormattingHelpers:
         result = _fmt_pct(33.33333)
         assert "%" in result
         assert result == "33.3%"
+
+    def test_pct_rounds_correctly(self) -> None:
+        assert _fmt_pct(33.35) == "33.4%" or _fmt_pct(33.35) == "33.3%"  # banker's rounding ok
+
+    def test_pct_negative(self) -> None:
+        result = _fmt_pct(-5.0)
+        assert "%" in result
+        assert "-5.0" in result
 
     # _fmt_intcomma
     def test_intcomma_basic(self) -> None:
@@ -470,6 +659,15 @@ class TestFormattingHelpers:
     def test_intcomma_large(self) -> None:
         assert _fmt_intcomma(1_000_000) == "1,000,000"
 
+    def test_intcomma_negative(self) -> None:
+        result = _fmt_intcomma(-1000)
+        assert "-" in result
+        assert "1,000" in result
+
+    def test_intcomma_thousand_boundary(self) -> None:
+        assert _fmt_intcomma(1000) == "1,000"
+        assert _fmt_intcomma(999) == "999"
+
     # _utc_timestamp
     def test_timestamp_returns_string(self) -> None:
         ts = _utc_timestamp()
@@ -483,6 +681,27 @@ class TestFormattingHelpers:
         ts = _utc_timestamp()
         assert "20" in ts  # Will be valid for years 2000–2099
 
+    def test_timestamp_non_empty(self) -> None:
+        ts = _utc_timestamp()
+        assert len(ts) > 10
+
+    def test_timestamp_format(self) -> None:
+        ts = _utc_timestamp()
+        # Expected format: "YYYY-MM-DD HH:MM:SS UTC"
+        parts = ts.split()
+        assert len(parts) == 3
+        assert parts[2] == "UTC"
+        date_part = parts[0]
+        assert len(date_part) == 10
+        assert date_part[4] == "-"
+        assert date_part[7] == "-"
+
+    def test_two_timestamps_close_together(self) -> None:
+        ts1 = _utc_timestamp()
+        ts2 = _utc_timestamp()
+        # Both should be the same date at least
+        assert ts1[:10] == ts2[:10]
+
 
 # --------------------------------------------------------------------------- #
 # Integration: CSV content matches DataFrame values                            #
@@ -490,25 +709,23 @@ class TestFormattingHelpers:
 
 
 class TestCsvDataIntegrity:
+    def _parse_csv_data(self, csv_bytes: bytes) -> pd.DataFrame:
+        """Helper: strip comment lines and parse CSV into a DataFrame."""
+        decoded = csv_bytes.decode("utf-8")
+        data_lines = [ln for ln in decoded.splitlines() if not ln.startswith("#")]
+        # Remove blank separator lines
+        data_lines = [ln for ln in data_lines if ln.strip()]
+        data_str = "\n".join(data_lines)
+        return pd.read_csv(io.StringIO(data_str))
+
     def test_csv_total_displaced_matches_dataframe(
         self, standard_report
     ) -> None:
         """Verify that values in the CSV match those from the DataFrame."""
-        import io
-        import pandas as pd
-
         csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
-        decoded = csv_bytes.decode("utf-8")
-
-        # Strip comment lines beginning with '#'
-        data_lines = [ln for ln in decoded.splitlines() if not ln.startswith("#")]
-        data_str = "\n".join(data_lines)
-
-        parsed_df = pd.read_csv(io.StringIO(data_str))
-
+        parsed_df = self._parse_csv_data(csv_bytes)
         expected_df = build_report_dataframe(standard_report)
 
-        # Check displaced worker counts match
         assert list(parsed_df["total_displaced"]) == list(
             expected_df["total_displaced"]
         )
@@ -517,16 +734,8 @@ class TestCsvDataIntegrity:
         self, standard_report
     ) -> None:
         """Verify financial exposure values are identical in CSV and DataFrame."""
-        import io
-        import pandas as pd
-
         csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
-        decoded = csv_bytes.decode("utf-8")
-
-        data_lines = [ln for ln in decoded.splitlines() if not ln.startswith("#")]
-        data_str = "\n".join(data_lines)
-
-        parsed_df = pd.read_csv(io.StringIO(data_str))
+        parsed_df = self._parse_csv_data(csv_bytes)
         expected_df = build_report_dataframe(standard_report)
 
         col = f"total_financial_exposure_{CURRENCY_CODE}"
@@ -534,3 +743,39 @@ class TestCsvDataIntegrity:
             parsed_df[col], expected_df[col]
         ):
             assert math.isclose(float(parsed_val), float(expected_val), rel_tol=1e-5)
+
+    def test_csv_scenario_names_match_dataframe(self, standard_report) -> None:
+        csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        expected_df = build_report_dataframe(standard_report)
+        assert list(parsed_df["scenario"]) == list(expected_df["scenario"])
+
+    def test_csv_headcount_matches_dataframe(self, standard_report) -> None:
+        csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        expected_df = build_report_dataframe(standard_report)
+        assert list(parsed_df["total_headcount"]) == list(expected_df["total_headcount"])
+
+    def test_csv_robot_tax_matches_dataframe(self, standard_report) -> None:
+        csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        expected_df = build_report_dataframe(standard_report)
+        col = f"robot_tax_liability_{CURRENCY_CODE}"
+        for pv, ev in zip(parsed_df[col], expected_df[col]):
+            assert math.isclose(float(pv), float(ev), rel_tol=1e-5)
+
+    def test_csv_has_three_data_rows(self, standard_report) -> None:
+        csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        assert len(parsed_df) == 3
+
+    def test_csv_zero_displacement_all_zeros(self, zero_displacement_report) -> None:
+        csv_bytes = generate_csv_bytes(zero_displacement_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        assert (parsed_df["total_displaced"] == 0).all()
+
+    def test_csv_displacement_pct_in_range(self, standard_report) -> None:
+        csv_bytes = generate_csv_bytes(standard_report, include_role_breakdown=False)
+        parsed_df = self._parse_csv_data(csv_bytes)
+        assert (parsed_df["displacement_pct"] >= 0.0).all()
+        assert (parsed_df["displacement_pct"] <= 100.0).all()

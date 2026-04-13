@@ -121,6 +121,22 @@ class TestRoleInputValidation:
         with pytest.raises(ValueError, match="non-empty"):
             RoleInput("   ", 10, 50.0)
 
+    def test_boundary_automation_0(self) -> None:
+        role = RoleInput("Test", 5, 0.0)
+        assert role.automation_potential == 0.0
+
+    def test_boundary_automation_100(self) -> None:
+        role = RoleInput("Test", 5, 100.0)
+        assert role.automation_potential == 100.0
+
+    def test_boundary_headcount_0(self) -> None:
+        role = RoleInput("Test", 0, 50.0)
+        assert role.headcount == 0
+
+    def test_fractional_automation_potential(self) -> None:
+        role = RoleInput("Test", 10, 33.7)
+        assert math.isclose(role.automation_potential, 33.7)
+
 
 # --------------------------------------------------------------------------- #
 # _calculate_role_displacement                                                 #
@@ -177,6 +193,39 @@ class TestRoleDisplacement:
         result = _calculate_role_displacement(role, 2.0)  # extreme multiplier
         assert result.displaced_workers <= role.headcount
 
+    def test_displaced_plus_remaining_equals_headcount(self) -> None:
+        role = RoleInput("Workers", 150, 65.0)
+        result = _calculate_role_displacement(role, 1.0)
+        assert result.displaced_workers + result.remaining_workers == role.headcount
+
+    def test_effective_rate_stored_correctly(self) -> None:
+        role = RoleInput("Clerks", 100, 60.0)
+        result = _calculate_role_displacement(role, 1.0)
+        assert math.isclose(result.displacement_rate, 0.6, rel_tol=1e-5)
+
+    def test_aggressive_100pct_potential_displaces_all(self) -> None:
+        role = RoleInput("Bots", 500, 100.0)
+        result = _calculate_role_displacement(role, 1.5)
+        assert result.displaced_workers == 500
+        assert result.displacement_rate == 1.0
+
+    def test_low_multiplier_low_displacement(self) -> None:
+        role = RoleInput("Artisans", 100, 20.0)
+        result = _calculate_role_displacement(role, 0.5)
+        # effective_rate = 0.1, displaced = floor(100 * 0.1) = 10
+        assert result.displaced_workers == 10
+
+    def test_single_worker_partial_rate_floors_to_zero(self) -> None:
+        role = RoleInput("Solo", 1, 50.0)
+        result = _calculate_role_displacement(role, 1.0)
+        # floor(1 * 0.5) = 0
+        assert result.displaced_workers == 0
+
+    def test_single_worker_full_rate_displaces_one(self) -> None:
+        role = RoleInput("Solo", 1, 100.0)
+        result = _calculate_role_displacement(role, 1.0)
+        assert result.displaced_workers == 1
+
 
 # --------------------------------------------------------------------------- #
 # _calculate_robot_tax                                                         #
@@ -205,6 +254,20 @@ class TestRobotTax:
         r2 = _calculate_robot_tax(100, 40_000.0, rate)
         assert math.isclose(r2, r1 * 2)
 
+    def test_negative_displaced_treated_as_zero(self) -> None:
+        # The function checks > 0, so negative values return 0
+        result = _calculate_robot_tax(-5, 60_000.0, 0.10)
+        assert result == 0.0
+
+    def test_high_salary_scales_tax(self) -> None:
+        r_low = _calculate_robot_tax(100, 30_000.0, 0.10)
+        r_high = _calculate_robot_tax(100, 90_000.0, 0.10)
+        assert math.isclose(r_high, r_low * 3)
+
+    def test_high_tax_rate(self) -> None:
+        result = _calculate_robot_tax(10, 50_000.0, 0.15)
+        assert math.isclose(result, 10 * 50_000.0 * 0.15)
+
 
 class TestProgressiveTaxRate:
     @pytest.mark.parametrize("count, expected_rate", [
@@ -224,6 +287,18 @@ class TestProgressiveTaxRate:
             f"displaced={count}: expected {expected_rate}, "
             f"got {get_robot_tax_rate(count)}"
         )
+
+    def test_rate_never_below_base(self) -> None:
+        for count in [0, 1, 10, 49]:
+            assert get_robot_tax_rate(count) >= ROBOT_TAX_RATE
+
+    def test_rate_monotonically_non_decreasing(self) -> None:
+        counts = [0, 49, 50, 249, 250, 499, 500, 999, 1000, 5000]
+        rates = [get_robot_tax_rate(c) for c in counts]
+        for i in range(len(rates) - 1):
+            assert rates[i] <= rates[i + 1], (
+                f"Rate decreased from count={counts[i]} to count={counts[i+1]}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -257,11 +332,37 @@ class TestSafetyNet:
         result = get_ui_cost_per_worker(60_000.0)
         assert math.isclose(result, 15_000.0)
 
-    def test_components_sum_to_total(self) -> None:
+    def test_components_all_non_negative(self) -> None:
         r, u, ui = _calculate_safety_net(25, 45_000.0)
-        assert math.isclose(r + u + ui, r + u + ui)  # trivially true
-        # More meaningful: each component is non-negative
         assert r >= 0 and u >= 0 and ui >= 0
+
+    def test_scales_linearly_with_displaced(self) -> None:
+        r1, u1, ui1 = _calculate_safety_net(10, 50_000.0)
+        r2, u2, ui2 = _calculate_safety_net(20, 50_000.0)
+        assert math.isclose(r2, r1 * 2)
+        assert math.isclose(u2, u1 * 2)
+        assert math.isclose(ui2, ui1 * 2)
+
+    def test_ui_scales_with_salary(self) -> None:
+        _, _, ui_low = _calculate_safety_net(10, 30_000.0)
+        _, _, ui_high = _calculate_safety_net(10, 60_000.0)
+        assert math.isclose(ui_high, ui_low * 2)
+
+    def test_retraining_does_not_scale_with_salary(self) -> None:
+        r_low, _, _ = _calculate_safety_net(10, 30_000.0)
+        r_high, _, _ = _calculate_safety_net(10, 300_000.0)
+        # Retraining is salary-independent
+        assert math.isclose(r_low, r_high)
+
+    def test_ubi_does_not_scale_with_salary(self) -> None:
+        _, u_low, _ = _calculate_safety_net(5, 20_000.0)
+        _, u_high, _ = _calculate_safety_net(5, 200_000.0)
+        assert math.isclose(u_low, u_high)
+
+    def test_large_displaced_count(self) -> None:
+        r, u, ui = _calculate_safety_net(10_000, 55_000.0)
+        assert r == 10_000 * RETRAINING_COST_PER_WORKER
+        assert u == 10_000 * UBI_ANNUAL_TRANSFER
 
 
 # --------------------------------------------------------------------------- #
@@ -320,6 +421,26 @@ class TestValidateInputs:
 
     def test_salary_at_maximum_boundary_passes(self, multi_roles) -> None:
         _validate_inputs(multi_roles, MAX_ANNUAL_SALARY, "Org")
+
+    def test_exactly_max_roles_passes(self, base_salary) -> None:
+        roles = [RoleInput(f"Role {i}", 10, 50.0) for i in range(MAX_ROLES)]
+        _validate_inputs(roles, base_salary, "Org")  # should not raise
+
+    def test_tuple_roles_raises_type_error(self, base_salary) -> None:
+        with pytest.raises(TypeError, match="list"):
+            _validate_inputs((RoleInput("A", 1, 10.0),), base_salary, "Org")  # type: ignore
+
+    def test_none_roles_raises_type_error(self, base_salary) -> None:
+        with pytest.raises(TypeError, match="list"):
+            _validate_inputs(None, base_salary, "Org")  # type: ignore
+
+    def test_integer_salary_passes(self, multi_roles) -> None:
+        # int is acceptable for average_annual_salary
+        _validate_inputs(multi_roles, int(MIN_ANNUAL_SALARY), "Org")
+
+    def test_negative_inf_salary_raises(self, multi_roles) -> None:
+        with pytest.raises(ValueError, match="finite"):
+            _validate_inputs(multi_roles, float("-inf"), "Org")
 
 
 # --------------------------------------------------------------------------- #
@@ -494,6 +615,7 @@ class TestCalculateReport:
 
         # progressive rate for 80 displaced = 0.11 (50–249 tier)
         expected_tax_rate = get_robot_tax_rate(80)
+        assert math.isclose(expected_tax_rate, 0.11)
         expected_tax = 80 * base_salary * expected_tax_rate
         assert math.isclose(moderate.robot_tax_liability, round(expected_tax, 2), rel_tol=1e-5)
 
@@ -506,3 +628,94 @@ class TestCalculateReport:
         # UI = 80 * get_ui_cost_per_worker(55000)
         expected_ui = 80 * get_ui_cost_per_worker(base_salary)
         assert math.isclose(moderate.unemployment_insurance_cost, round(expected_ui, 2), rel_tol=1e-5)
+
+    def test_optimistic_calculation_correctness(self, base_salary) -> None:
+        """Manually verify optimistic scenario arithmetic."""
+        roles = [RoleInput("Data Entry", 100, 80.0)]
+        report = calculate_report(roles, base_salary)
+        optimistic = report.optimistic
+
+        # multiplier=0.5, potential=80% => displaced = floor(100*0.4) = 40
+        assert optimistic.total_displaced == 40
+        assert optimistic.total_remaining == 60
+
+    def test_aggressive_calculation_correctness(self, base_salary) -> None:
+        """Manually verify aggressive scenario arithmetic."""
+        roles = [RoleInput("Data Entry", 100, 80.0)]
+        report = calculate_report(roles, base_salary)
+        aggressive = report.aggressive
+
+        # multiplier=1.5, potential=80% => raw=1.2 => capped=1.0 => displaced=100
+        assert aggressive.total_displaced == 100
+        assert aggressive.total_remaining == 0
+
+    def test_mixed_roles_sum_correctly(self, base_salary) -> None:
+        roles = [
+            RoleInput("High", 100, 90.0),
+            RoleInput("Low", 100, 10.0),
+        ]
+        report = calculate_report(roles, base_salary)
+        moderate = report.moderate
+        # High: floor(100 * 0.9) = 90, Low: floor(100 * 0.1) = 10
+        assert moderate.total_displaced == 100
+        assert moderate.total_headcount == 200
+
+    def test_roles_list_is_copy_not_reference(self, multi_roles, base_salary) -> None:
+        """Mutating the input list after calculation should not affect the report."""
+        report = calculate_report(multi_roles, base_salary)
+        original_count = len(report.roles)
+        multi_roles.append(RoleInput("New Role", 5, 50.0))
+        assert len(report.roles) == original_count
+
+    def test_all_zero_headcount_roles(self, base_salary) -> None:
+        roles = [RoleInput("Ghost", 0, 100.0), RoleInput("Empty", 0, 50.0)]
+        report = calculate_report(roles, base_salary)
+        for scenario in report.all_scenarios:
+            assert scenario.total_headcount == 0
+            assert scenario.total_displaced == 0
+            assert scenario.displacement_percentage == 0.0
+
+    def test_robot_tax_zero_when_no_displacement(self, base_salary) -> None:
+        roles = [RoleInput("Protected", 100, 0.0)]
+        report = calculate_report(roles, base_salary)
+        for scenario in report.all_scenarios:
+            assert scenario.robot_tax_liability == 0.0
+
+    def test_safety_net_zero_when_no_displacement(self, base_salary) -> None:
+        roles = [RoleInput("Protected", 100, 0.0)]
+        report = calculate_report(roles, base_salary)
+        for scenario in report.all_scenarios:
+            assert scenario.retraining_cost == 0.0
+            assert scenario.ubi_transfer_annual == 0.0
+            assert scenario.unemployment_insurance_cost == 0.0
+            assert scenario.total_safety_net_exposure == 0.0
+
+    def test_large_workforce_calculation(self, base_salary) -> None:
+        roles = [RoleInput("Mass Workers", 500_000, 50.0)]
+        report = calculate_report(roles, base_salary)
+        moderate = report.moderate
+        # floor(500_000 * 0.5) = 250_000
+        assert moderate.total_displaced == 250_000
+
+    def test_report_average_salary_stored(self, multi_roles, base_salary) -> None:
+        report = calculate_report(multi_roles, base_salary)
+        assert math.isclose(report.average_annual_salary, base_salary)
+
+    def test_total_headcount_property_matches_optimistic(self, full_report) -> None:
+        assert full_report.total_headcount == full_report.optimistic.total_headcount
+
+    def test_calculate_scenario_matches_calculate_report(self, multi_roles, base_salary) -> None:
+        """_calculate_scenario results should match the scenario in the full report."""
+        full_report = calculate_report(multi_roles, base_salary)
+        moderate_def = next(s for s in SCENARIOS if s["key"] == "moderate")
+        direct = _calculate_scenario(
+            scenario_def=moderate_def,
+            roles=multi_roles,
+            average_annual_salary=base_salary,
+        )
+        assert direct.total_displaced == full_report.moderate.total_displaced
+        assert math.isclose(
+            direct.robot_tax_liability,
+            full_report.moderate.robot_tax_liability,
+            rel_tol=1e-9,
+        )
